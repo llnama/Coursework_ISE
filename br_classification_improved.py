@@ -3,18 +3,17 @@
 import pandas as pd
 import numpy as np
 import re
-import math
+import os
 
 # Text and feature engineering
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Evaluation and tuning
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import (accuracy_score, precision_score, recall_score,
-                             f1_score, roc_curve, auc)
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
 # Classifier
-from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import RandomForestClassifier
 
 # Text cleaning & stopwords
 import nltk
@@ -30,7 +29,7 @@ def remove_html(text):
 
 def remove_emoji(text):
     """Remove emojis using a regex pattern."""
-    emoji_pattern = re.compile("["
+    emoji_pattern = re.compile("["  
                                u"\U0001F600-\U0001F64F"  # emoticons
                                u"\U0001F300-\U0001F5FF"  # symbols & pictographs
                                u"\U0001F680-\U0001F6FF"  # transport & map symbols
@@ -66,15 +65,13 @@ def clean_str(string):
     return string.strip().lower()
 
 ########## 3. Download & read data ##########
-import os
-import subprocess
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dataset_folder = os.path.join(script_dir, "datasets")
 
 # Choose the project (options: 'pytorch', 'tensorflow', 'keras', 'incubator-mxnet', 'caffe')
 project = 'pytorch'
-path = os.path.join(dataset_folder,f'{project}.csv')
+path = os.path.join(dataset_folder, f'{project}.csv')
 
 pd_all = pd.read_csv(path)
 pd_all = pd_all.sample(frac=1, random_state=999)  # Shuffle
@@ -104,7 +101,7 @@ datafile = os.path.join(dataset_folder, 'Title+Body.csv')
 REPEAT = 10
 
 # 3) Output CSV file name
-out_csv_name = os.path.join(script_dir, f'{project}_NB.csv')
+out_csv_name = os.path.join(script_dir, f'{project}_RandomForest.csv')
 
 # ========== Read and clean data ==========
 data = pd.read_csv(datafile).fillna('')
@@ -119,12 +116,7 @@ data[text_col] = data[text_col].apply(remove_emoji)
 data[text_col] = data[text_col].apply(remove_stopwords)
 data[text_col] = data[text_col].apply(clean_str)
 
-# ========== Hyperparameter grid ==========
-# We use logspace for var_smoothing: [1e-12, 1e-11, ..., 1]
-params = {
-    'var_smoothing': np.logspace(-12, 0, 13)
-}
-
+# ========== Random Forest Classifier ==========
 # Lists to store metrics across repeated runs
 accuracies  = []
 precisions  = []
@@ -153,22 +145,19 @@ for repeated_time in range(REPEAT):
     X_train = tfidf.fit_transform(train_text).toarray()
     X_test = tfidf.transform(test_text).toarray()
 
-    # --- 4.3 Naive Bayes model & GridSearch ---
-    clf = GaussianNB()
-    grid = GridSearchCV(
-        clf,
-        params,
-        cv=5,              # 5-fold CV (can be changed)
-        scoring='roc_auc'  # Using roc_auc as the metric for selection
+    # --- 4.3 Train Random Forest Model ---
+    clf = RandomForestClassifier(
+        n_estimators=200,  # Number of trees in the forest
+        #class_weight="balanced",
+        #min_samples_split=2,
+        max_depth=None,     # No max depth, letting trees grow fully
+        random_state=42,
+        n_jobs=-1  # Uses all CPU cores for training
     )
-    grid.fit(X_train, y_train)
-
-    # Retrieve the best model
-    best_clf = grid.best_estimator_
-    best_clf.fit(X_train, y_train)
+    clf.fit(X_train, y_train)
 
     # --- 4.4 Make predictions & evaluate ---
-    y_pred = best_clf.predict(X_test)
+    y_pred = clf.predict(X_test)
 
     # Accuracy
     acc = accuracy_score(y_test, y_pred)
@@ -186,12 +175,9 @@ for repeated_time in range(REPEAT):
     f1 = f1_score(y_test, y_pred, average='macro')
     f1_scores.append(f1)
 
-    # AUC
-    # If labels are 0/1 only, this works directly.
-    # If labels are something else, adjust pos_label accordingly.
-    fpr, tpr, _ = roc_curve(y_test, y_pred, pos_label=1)
-    auc_val = auc(fpr, tpr)
-    auc_values.append(auc_val)
+    # AUC Score
+    auc = roc_auc_score(y_test, y_pred)
+    auc_values.append(auc)
 
 # --- 4.5 Aggregate results ---
 final_accuracy  = np.mean(accuracies)
@@ -200,7 +186,7 @@ final_recall    = np.mean(recalls)
 final_f1        = np.mean(f1_scores)
 final_auc       = np.mean(auc_values)
 
-print("=== Naive Bayes + TF-IDF Results ===")
+print("=== Random Forest + TF-IDF Results ===")
 print(f"Number of repeats:     {REPEAT}")
 print(f"Average Accuracy:      {final_accuracy:.4f}")
 print(f"Average Precision:     {final_precision:.4f}")
@@ -208,6 +194,7 @@ print(f"Average Recall:        {final_recall:.4f}")
 print(f"Average F1 score:      {final_f1:.4f}")
 print(f"Average AUC:           {final_auc:.4f}")
 
+# Save final results to CSV
 df_log = pd.DataFrame(
     {
         'repeated_times': [REPEAT],
@@ -215,7 +202,7 @@ df_log = pd.DataFrame(
         'Precision': [final_precision],
         'Recall': [final_recall],
         'F1': [final_f1],
-        'AUC': [final_auc],
+        'AUC': [final_auc]
     }
 )
 
